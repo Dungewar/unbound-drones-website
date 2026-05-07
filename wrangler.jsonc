@@ -15,13 +15,13 @@
 	"observability": {
 		"enabled": true
 	},
-	"upload_source_maps": true
+	"upload_source_maps": true,
 
-	  "routes": [
+	"routes": [
 	    {
 	      "pattern": "unbound-drones.org",
 	      "custom_domain": true
 	    }
-	  ]
+	]
 
 }
