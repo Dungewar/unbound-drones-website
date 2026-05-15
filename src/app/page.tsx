@@ -35,11 +35,11 @@ export default function Home() {
 						}}
 					>
 						<img
-							src="/logo.png"
-							alt="UNBOUND logo"
+							src="/logo-wide.png"
+							alt="UNBOUND"
 							className="brand-logo"
 						/>
-						<div>UNBOUND</div>
+						{/* <div>UNBOUND</div> */}
 					</a>
 					<div className="nav-links">
 						{navItems.map((item) => (
