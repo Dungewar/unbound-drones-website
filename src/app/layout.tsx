@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-	title: "UNBOUND — Drone Education",
+	title: "UNBOUND",
 	description: "Drone education, access, and freedom.",
 };
 
@@ -19,19 +19,9 @@ export default function RootLayout({
 }>) {
 	return (
 		<html lang="en">
-			<head>
-				<script
-					type="importmap"
-					dangerouslySetInnerHTML={{
-						__html: JSON.stringify({
-							imports: {
-								three: "https://unpkg.com/three@0.160.0/build/three.module.js",
-							},
-						}),
-					}}
-				/>
-			</head>
-			<body className={inter.variable}>{children}</body>
+			<body className={`${inter.variable} antialiased`}>
+				{children}
+			</body>
 		</html>
 	);
 }
