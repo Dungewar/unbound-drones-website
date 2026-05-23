@@ -258,19 +258,15 @@ function sampleWeather(lat, lon, x, y, z, terrain, seed, patternScale) {
   };
 }
 
-function writePackedScalar(bytes, pixelIndex, value) {
-  const byte = Math.round(clamp01(value) * 255);
-  bytes[pixelIndex + 0] = byte;
-  bytes[pixelIndex + 1] = byte;
-  bytes[pixelIndex + 2] = byte;
-  bytes[pixelIndex + 3] = 255;
+function writeScalarByte(bytes, pixelIndex, value) {
+  bytes[pixelIndex] = Math.round(clamp01(value) * 255);
 }
 
 function stitchColorBytes(bytes, width, height) {
   for (let y = 0; y < height; y++) {
-    const left = y * width * 4;
-    const right = left + (width - 1) * 4;
-    for (let c = 0; c < 4; c++) {
+    const left = y * width * 3;
+    const right = left + (width - 1) * 3;
+    for (let c = 0; c < 3; c++) {
       const value = Math.round((bytes[left + c] + bytes[right + c]) * 0.5);
       bytes[left + c] = value;
       bytes[right + c] = value;
@@ -280,17 +276,11 @@ function stitchColorBytes(bytes, width, height) {
 
 function stitchScalarBytes(bytes, width, height) {
   for (let y = 0; y < height; y++) {
-    const left = y * width * 4;
-    const right = left + (width - 1) * 4;
+    const left = y * width;
+    const right = left + (width - 1);
     const value = Math.round((bytes[left] + bytes[right]) * 0.5);
-    bytes[left + 0] = value;
-    bytes[left + 1] = value;
-    bytes[left + 2] = value;
-    bytes[left + 3] = 255;
-    bytes[right + 0] = value;
-    bytes[right + 1] = value;
-    bytes[right + 2] = value;
-    bytes[right + 3] = 255;
+    bytes[left] = value;
+    bytes[right] = value;
   }
 }
 
@@ -307,15 +297,15 @@ export function generateCloudDeckBytes({
     z: cloudSeed * 0.793,
   };
 
-  const lowColor = new Uint8Array(width * height * 4);
-  const lowAlpha = new Uint8Array(width * height * 4);
-  const lowDepth = new Uint8Array(width * height * 4);
-  const midColor = new Uint8Array(width * height * 4);
-  const midAlpha = new Uint8Array(width * height * 4);
-  const midDepth = new Uint8Array(width * height * 4);
-  const cirrusColor = new Uint8Array(width * height * 4);
-  const cirrusAlpha = new Uint8Array(width * height * 4);
-  const cirrusDepth = new Uint8Array(width * height * 4);
+  const lowColor = new Uint8Array(width * height * 3);
+  const lowAlpha = new Uint8Array(width * height);
+  const lowDepth = new Uint8Array(width * height);
+  const midColor = new Uint8Array(width * height * 3);
+  const midAlpha = new Uint8Array(width * height);
+  const midDepth = new Uint8Array(width * height);
+  const cirrusColor = new Uint8Array(width * height * 3);
+  const cirrusAlpha = new Uint8Array(width * height);
+  const cirrusDepth = new Uint8Array(width * height);
 
   for (let py = 0; py < height; py++) {
     const v = py / (height - 1);
@@ -340,34 +330,32 @@ export function generateCloudDeckBytes({
       const lowDepthValue = clamp01(lowAlphaValue * (0.32 + sample.lowHeight * 0.68));
       const midDepthValue = clamp01(midAlphaValue * (0.28 + sample.midHeight * 0.72));
       const cirrusDepthValue = clamp01(cirrusAlphaValue * (0.16 + sample.highHeight * 0.84));
-      const pixelIndex = (py * width + px) * 4;
+      const pixelIndex3 = (py * width + px) * 3;
+      const pixelIndex = py * width + px;
 
       const brightness = clamp01(blendedHeight * 0.75 + sample.character * 0.15 + lowAlphaValue * 0.10);
       const lowLight = lerp(242, 255, brightness);
-      lowColor[pixelIndex + 0] = Math.round(lowLight);
-      lowColor[pixelIndex + 1] = Math.round(Math.min(255, lowLight + 2));
-      lowColor[pixelIndex + 2] = Math.round(Math.min(255, lowLight + 5));
-      lowColor[pixelIndex + 3] = 255;
+      lowColor[pixelIndex3 + 0] = Math.round(lowLight);
+      lowColor[pixelIndex3 + 1] = Math.round(Math.min(255, lowLight + 2));
+      lowColor[pixelIndex3 + 2] = Math.round(Math.min(255, lowLight + 5));
 
       const midBrightness = clamp01(sample.midHeight * 0.75 + sample.character * 0.15 + midAlphaValue * 0.10);
       const midLight = lerp(200, 252, midBrightness);
-      midColor[pixelIndex + 0] = Math.round(midLight);
-      midColor[pixelIndex + 1] = Math.round(Math.min(255, midLight + 2));
-      midColor[pixelIndex + 2] = Math.round(Math.min(255, midLight + 4));
-      midColor[pixelIndex + 3] = 255;
+      midColor[pixelIndex3 + 0] = Math.round(midLight);
+      midColor[pixelIndex3 + 1] = Math.round(Math.min(255, midLight + 2));
+      midColor[pixelIndex3 + 2] = Math.round(Math.min(255, midLight + 4));
 
       const cirrusLight = lerp(215, 250, clamp01(sample.highHeight * 0.80 + cirrusAlphaValue * 0.20));
-      cirrusColor[pixelIndex + 0] = Math.round(cirrusLight);
-      cirrusColor[pixelIndex + 1] = Math.round(Math.min(255, cirrusLight + 2));
-      cirrusColor[pixelIndex + 2] = Math.round(Math.min(255, cirrusLight + 6));
-      cirrusColor[pixelIndex + 3] = 255;
+      cirrusColor[pixelIndex3 + 0] = Math.round(cirrusLight);
+      cirrusColor[pixelIndex3 + 1] = Math.round(Math.min(255, cirrusLight + 2));
+      cirrusColor[pixelIndex3 + 2] = Math.round(Math.min(255, cirrusLight + 6));
 
-      writePackedScalar(lowAlpha, pixelIndex, lowAlphaValue);
-      writePackedScalar(lowDepth, pixelIndex, lowDepthValue);
-      writePackedScalar(midAlpha, pixelIndex, midAlphaValue);
-      writePackedScalar(midDepth, pixelIndex, midDepthValue);
-      writePackedScalar(cirrusAlpha, pixelIndex, cirrusAlphaValue);
-      writePackedScalar(cirrusDepth, pixelIndex, cirrusDepthValue);
+      writeScalarByte(lowAlpha, pixelIndex, lowAlphaValue);
+      writeScalarByte(lowDepth, pixelIndex, lowDepthValue);
+      writeScalarByte(midAlpha, pixelIndex, midAlphaValue);
+      writeScalarByte(midDepth, pixelIndex, midDepthValue);
+      writeScalarByte(cirrusAlpha, pixelIndex, cirrusAlphaValue);
+      writeScalarByte(cirrusDepth, pixelIndex, cirrusDepthValue);
     }
   }
 

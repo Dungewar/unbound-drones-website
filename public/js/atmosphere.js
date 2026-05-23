@@ -3,7 +3,7 @@
 // The shader integrates extinction along the view ray and sun ray for each
 // sample so the limb, disc tint, and terminator all come from the same model.
 
-import * as THREE from 'three';
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import {
   EARTH_R, EARTH_POSITION, TERRAIN_EXAGGERATION,
 } from './config.js';

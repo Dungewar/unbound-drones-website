@@ -43,8 +43,8 @@ scene.add(camera);
 // Faint warm ambient so deep shadows on the Earth surface don't crush to
 // pure black under tone mapping — Earthshine + airglow contribute a small
 // floor in reality. Kept very low so the night side still reads as night.
-const WORLD_AMBIENT_INTENSITY = 0.0008;
-const WORLD_FILL_INTENSITY = 0.0018;
+const WORLD_AMBIENT_INTENSITY = 0.0025;
+const WORLD_FILL_INTENSITY = 0.005;
 
 const ambient = new THREE.AmbientLight('#142238', WORLD_AMBIENT_INTENSITY);
 scene.add(ambient);

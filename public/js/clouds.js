@@ -19,18 +19,18 @@ const CLOUD_PREVIEW_HEIGHT = CLOUD_PREVIEW_WIDTH / 2;
 const CLOUD_FINAL_HEIGHT = CLOUD_FINAL_WIDTH / 2;
 const EARTH_GUIDE_MAX_DIM = maxTextureSize >= 16384 ? 2048 : 1024;
 const CLOUD_PATTERN_SCALE = maxTextureSize >= 16384 ? 1.42 : 1.28;
-const CLOUD_SEGMENTS_W = 512;
-const CLOUD_SEGMENTS_H = 256;
-const SHELL_SEGMENTS_W = 512;
-const SHELL_SEGMENTS_H = 256;
+const CLOUD_SEGMENTS_W = 256;
+const CLOUD_SEGMENTS_H = 128;
+const SHELL_SEGMENTS_W = 256;
+const SHELL_SEGMENTS_H = 128;
 const LOW_CLOUD_ALTITUDE = 1500;
 const MID_CLOUD_ALTITUDE = 5500;
 const CIRRUS_ALTITUDE = 10000;
 const LOW_CLOUD_THICKNESS = 1500;
 const MID_CLOUD_THICKNESS = 1800;
 const CIRRUS_THICKNESS = 1000;
-const SUB_SHELL_SEGS_W = 256;
-const SUB_SHELL_SEGS_H = 128;
+const SUB_SHELL_SEGS_W = 128;
+const SUB_SHELL_SEGS_H = 64;
 const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
 
 function randomUnitFloat() {
@@ -66,8 +66,8 @@ function smoothstep(edge0, edge1, x) {
 }
 
 // ── Texture helpers ──────────────────────────
-function createTexture(bytes, width, height, colorSpace) {
-  const texture = new THREE.DataTexture(bytes, width, height, THREE.RGBAFormat);
+function createTexture(bytes, width, height, colorSpace, format = THREE.RGBAFormat) {
+  const texture = new THREE.DataTexture(bytes, width, height, format);
   texture.colorSpace = colorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
@@ -76,6 +76,8 @@ function createTexture(bytes, width, height, colorSpace) {
   texture.magFilter = THREE.LinearFilter;
   if (maxAnisotropy > 1) texture.anisotropy = maxAnisotropy;
   texture.needsUpdate = true;
+  renderer.initTexture(texture);
+  texture.image.data = null;
   return texture;
 }
 
@@ -205,15 +207,15 @@ function createCloudDeckTextures(deckSet) {
   return {
     width,
     height,
-    lowColor: createTexture(deckSet.lowColor, width, height, THREE.SRGBColorSpace),
-    lowAlpha: createTexture(deckSet.lowAlpha, width, height, THREE.NoColorSpace),
-    lowDepth: createTexture(deckSet.lowDepth, width, height, THREE.NoColorSpace),
-    midColor: createTexture(deckSet.midColor, width, height, THREE.SRGBColorSpace),
-    midAlpha: createTexture(deckSet.midAlpha, width, height, THREE.NoColorSpace),
-    midDepth: createTexture(deckSet.midDepth, width, height, THREE.NoColorSpace),
-    cirrusColor: createTexture(deckSet.cirrusColor, width, height, THREE.SRGBColorSpace),
-    cirrusAlpha: createTexture(deckSet.cirrusAlpha, width, height, THREE.NoColorSpace),
-    cirrusDepth: createTexture(deckSet.cirrusDepth, width, height, THREE.NoColorSpace),
+    lowColor: createTexture(deckSet.lowColor, width, height, THREE.SRGBColorSpace, THREE.RGBFormat),
+    lowAlpha: createTexture(deckSet.lowAlpha, width, height, THREE.NoColorSpace, THREE.RedFormat),
+    lowDepth: createTexture(deckSet.lowDepth, width, height, THREE.NoColorSpace, THREE.RedFormat),
+    midColor: createTexture(deckSet.midColor, width, height, THREE.SRGBColorSpace, THREE.RGBFormat),
+    midAlpha: createTexture(deckSet.midAlpha, width, height, THREE.NoColorSpace, THREE.RedFormat),
+    midDepth: createTexture(deckSet.midDepth, width, height, THREE.NoColorSpace, THREE.RedFormat),
+    cirrusColor: createTexture(deckSet.cirrusColor, width, height, THREE.SRGBColorSpace, THREE.RGBFormat),
+    cirrusAlpha: createTexture(deckSet.cirrusAlpha, width, height, THREE.NoColorSpace, THREE.RedFormat),
+    cirrusDepth: createTexture(deckSet.cirrusDepth, width, height, THREE.NoColorSpace, THREE.RedFormat),
   };
 }
 
@@ -231,9 +233,15 @@ function disposeCloudDeck(deck) {
   Object.values(deck).forEach((texture) => texture?.dispose?.());
 }
 
+function releaseEarthGuide() {
+  earthGuide = null;
+}
+
 // ── Init ─────────────────────────────────────
-const earthGuide = createEarthGuide(earthPreviewTex);
+let earthGuide = createEarthGuide(earthPreviewTex);
 let cloudDeck = buildCloudDeck(CLOUD_PREVIEW_WIDTH, CLOUD_PREVIEW_HEIGHT, earthGuide);
+earthPreviewTex.dispose();
+earthPreviewTex.image = null;
 const cloudRoot = new THREE.Group();
 earthGroup.add(cloudRoot);
 let cloudTexturesEnabled = true;
@@ -299,14 +307,19 @@ function createCloudLayer({
       'void main() {',
       'uniform vec3 uSunDir;\nuniform float uCloudShadowsEnabled;\nuniform float uShellHeight;\nvarying vec3 vShellWorldNormal;\nvoid main() {',
     );
-    if (shellHeight > 0) {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <alphamap_fragment>',
-        `#include <alphamap_fragment>
+    const alphaMapFragment = `#ifdef USE_ALPHAMAP
+        diffuseColor.a *= texture2D(alphaMap, vAlphaMapUv).r;
+      #endif${
+        shellHeight > 0
+          ? `
         float _cloudThickness = texture2D(bumpMap, vBumpMapUv).r;
-        diffuseColor.a *= smoothstep(uShellHeight - 0.1, uShellHeight + 0.08, _cloudThickness);`,
-      );
-    }
+        diffuseColor.a *= smoothstep(uShellHeight - 0.1, uShellHeight + 0.08, _cloudThickness);`
+          : ''
+      }`;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <alphamap_fragment>',
+      alphaMapFragment,
+    );
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <lights_phong_fragment>',
       `#include <lights_phong_fragment>
@@ -428,11 +441,18 @@ function swapCloudDeck(nextDeck) {
 
 // ── High-res worker ──────────────────────────
 function requestHighResCloudDeck() {
-  if (typeof Worker === 'undefined') return;
-  if (CLOUD_FINAL_WIDTH <= CLOUD_PREVIEW_WIDTH) return;
+  if (typeof Worker === 'undefined') {
+    releaseEarthGuide();
+    return;
+  }
+  if (CLOUD_FINAL_WIDTH <= CLOUD_PREVIEW_WIDTH) {
+    releaseEarthGuide();
+    return;
+  }
 
   const guideForWorker = serializeEarthGuide(earthGuide);
   const transferList = getEarthGuideTransferList(guideForWorker);
+  releaseEarthGuide();
   const worker = new Worker('/js/clouds-worker.js', { type: 'module' });
   cloudWorker = worker;
   const requestId = `${Date.now()}-${Math.random()}`;

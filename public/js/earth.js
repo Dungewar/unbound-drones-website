@@ -24,6 +24,10 @@ const maxAniso = renderer.capabilities.getMaxAnisotropy();
 const TILE_LOAD_CONCURRENCY = 6;
 const tileLoadQueue = [];
 let activeTileLoads = 0;
+const INITIAL_TILE_PRELOAD_LIMIT = 24;
+const MIP_OVERHEAD_FACTOR = 4 / 3;
+const RGBA_BYTES_PER_PIXEL = 4;
+const EARTH_TEXTURES_PER_TILE = 2; // day + night
 
 function drainTileLoadQueue() {
   while (activeTileLoads < TILE_LOAD_CONCURRENCY && tileLoadQueue.length > 0) {
@@ -107,7 +111,8 @@ geometryWorker.onmessage = (e) => {
     return;
   }
 
-  if (id !== geometryRequestId || earthDisposed) return;
+  if (earthDisposed) return;
+  if (id !== geometryRequestId && !e.data.cameraTriggered) return;
 
   if (phase === -1 || error) {
     console.warn('[earth] geometry worker error:', error);
@@ -149,33 +154,31 @@ geometryWorker.onmessage = (e) => {
 
   if (phase === 1) {
     // Progress only — assembly happens in the worker
-    console.log(`[earth] row ${e.data.row + 1}/${e.data.totalRows}`);
+    const cell = (e.data.cell ?? 0) + 1;
+    const total = e.data.totalCells ?? 0;
+    if (total > 0) console.log(`[earth] cell ${cell}/${total}`);
     return;
   }
 
   if (phase === 2) {
     console.log(`[earth] phase 2 — received assembled geometry (${e.data.totalVertices.toLocaleString()} verts)`);
-    const lodIndex = pendingGeometryLODIndex;
-    if (lodIndex < 0) return;
+
+    let lodIndex;
+    if (e.data.cameraTriggered) {
+      lodIndex = e.data.lodIndex ?? EARTH_TEXTURE_LOD_LEVELS.length - 1;
+    } else {
+      lodIndex = pendingGeometryLODIndex;
+      if (lodIndex < 0) return;
+    }
     const lod = EARTH_TEXTURE_LOD_LEVELS[lodIndex];
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(e.data.positions, 3));
-    geo.setAttribute('uv', new THREE.Int16BufferAttribute(e.data.uvs, 2, true));
-    geo.setAttribute('normal', new THREE.Int8BufferAttribute(e.data.normals, 3, true));
-    geo.setIndex(new THREE.Uint32BufferAttribute(e.data.indices, 1));
+    const geo = earthSurface.geometry;
+    applyGeometryBuffers(geo, e.data);
 
-    const groups = e.data.groups;
-    for (let i = 0; i < groups.length; i += 3) {
-      geo.addGroup(groups[i], groups[i + 1], groups[i + 2]);
-    }
-
-    const globalUVAttr = new THREE.Int16BufferAttribute(e.data.globalUVs, 2, true);
-    geo.setAttribute('_globalUV', globalUVAttr);
-    earthGlobalUV = globalUVAttr;
+    earthGlobalUV = geo.getAttribute('_globalUV');
     earthTileUV = geo.getAttribute('uv');
 
-    // Track per-tile triangle counts for bump-mode heatmap
+    const groups = e.data.groups;
     for (let i = 0; i < groups.length; i += 3) {
       const mat = groups[i + 2];
       if (mat < earthTiles.length) {
@@ -183,11 +186,9 @@ geometryWorker.onmessage = (e) => {
       }
     }
 
-    earthSurface.geometry.dispose();
-    earthSurface.geometry = geo;
-
-    // The geometry now reflects pending depths — make them active
-    if (pendingDynamicDepths) {
+    if (e.data.cameraTriggered && e.data.activeDepths) {
+      activeDepths = e.data.activeDepths;
+    } else if (pendingDynamicDepths) {
       activeDepths = pendingDynamicDepths;
       pendingDynamicDepths = null;
     }
@@ -209,8 +210,8 @@ geometryWorker.onmessage = (e) => {
     if (_geometryAppliedResolve) { console.log('[earth] geometry applied to mesh'); _geometryAppliedResolve(); _geometryAppliedResolve = null; }
     if (_firstGeometryResolve) { _firstGeometryResolve(); _firstGeometryResolve = null; }
 
-    const vertCount = geo.getAttribute('position').count;
-    const triCount = geo.index ? geo.index.count / 3 : 0;
+    const vertCount = e.data.totalVertices;
+    const triCount = e.data.indices.length / 3;
     const geometryParams = getAdaptiveBumpParamsForLOD(lod);
     publishEarthLODState({
       ...geometryParams,
@@ -221,29 +222,75 @@ geometryWorker.onmessage = (e) => {
     console.log(
       `[earth] ${lod.id} adaptive mesh: ${vertCount.toLocaleString()} vertices, ${triCount.toLocaleString()} triangles`,
     );
-
-    // If camera has moved during the build, start another rebuild immediately
-    if (distanceLODEnabled && bumpDepths) {
-      camera.getWorldPosition(_earthCameraWorld2);
-      const combinedDepths = computePerCellCombinedDepths(_earthCameraWorld2);
-      if (combinedDepths) {
-        let changed = !activeDepths || activeDepths.length !== combinedDepths.length;
-        if (!changed) {
-          for (let i = 0; i < combinedDepths.length; i++) {
-            if (combinedDepths[i] !== activeDepths[i]) { changed = true; break; }
-          }
-        }
-        if (changed) {
-          console.log('[earth] camera moved during build — starting next rebuild');
-          requestAdaptiveGeometryLOD(EARTH_TEXTURE_LOD_LEVELS.length - 1, combinedDepths);
-        }
-      }
-    }
   }
 };
 
-// Camera pos for phase 2 continuous-rebuild check
-const _earthCameraWorld2 = new THREE.Vector3();
+// Reuse geometry buffers when possible to avoid GPU reallocation
+let _geoFirstWorkerBuild = true;
+function applyGeometryBuffers(geo, data) {
+  const posAttr = geo.getAttribute('position');
+  const canUpdateInPlace = !_geoFirstWorkerBuild
+    && posAttr
+    && posAttr.array instanceof Float32Array
+    && posAttr.array.length >= data.positions.length
+    && geo.index && geo.index.array.length >= data.indices.length;
+
+  if (canUpdateInPlace) {
+    posAttr.array.set(data.positions);
+    posAttr.needsUpdate = true;
+
+    const uvAttr = geo.getAttribute('uv');
+    uvAttr.array.set(data.uvs);
+    uvAttr.needsUpdate = true;
+
+    const normAttr = geo.getAttribute('normal');
+    normAttr.array.set(data.normals);
+    normAttr.needsUpdate = true;
+
+    geo.index.array.set(data.indices);
+    geo.index.needsUpdate = true;
+
+    const guvAttr = geo.getAttribute('_globalUV');
+    guvAttr.array.set(data.globalUVs);
+    guvAttr.needsUpdate = true;
+  } else {
+    const headroom = 1.3;
+    const vertCap = Math.ceil(data.totalVertices * headroom);
+    const idxCap = Math.ceil(data.indices.length * headroom);
+
+    const posArr = new Float32Array(vertCap * 3);
+    posArr.set(data.positions);
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+
+    const uvArr = new Int16Array(vertCap * 2);
+    uvArr.set(data.uvs);
+    geo.setAttribute('uv', new THREE.Int16BufferAttribute(uvArr, 2, true));
+
+    const normArr = new Int8Array(vertCap * 3);
+    normArr.set(data.normals);
+    geo.setAttribute('normal', new THREE.Int8BufferAttribute(normArr, 3, true));
+
+    const idxArr = new Uint32Array(idxCap);
+    idxArr.set(data.indices);
+    geo.setIndex(new THREE.Uint32BufferAttribute(idxArr, 1));
+
+    const guvArr = new Int16Array(vertCap * 2);
+    guvArr.set(data.globalUVs);
+    geo.setAttribute('_globalUV', new THREE.Int16BufferAttribute(guvArr, 2, true));
+
+    _geoFirstWorkerBuild = false;
+  }
+
+  geo.clearGroups();
+  const groups = data.groups;
+  for (let i = 0; i < groups.length; i += 3) {
+    geo.addGroup(groups[i], groups[i + 1], groups[i + 2]);
+  }
+
+  if (!geo.boundingSphere) {
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), EARTH_R + BUMP_DISPLACEMENT_SCALE);
+  }
+}
 
 export const EARTH_TILE_ROWS = 12;
 export const EARTH_TILE_COLS = 24;
@@ -292,7 +339,7 @@ const FULL_DETAIL_BUMP_PARAMS = {
   baseSegmentsLon: 336,  // 24 × 14
   baseSegmentsLat: 168,  // 12 × 14
   maxDepth: 8,
-  threshold: 0.05,
+  threshold: 0.10,
 };
 
 // Maximum screen-pixel geometric error allowed before a cell needs more
@@ -313,7 +360,7 @@ let earthTexturesEnabled = true;
 let earthRenderMode = 'textures';
 let heatmapLODMode = 'bump';        // 'bump' | 'distance' — which LOD data the heatmap shows
 let distanceLODEnabled = true;
-let textureLODEnabled = false;
+let textureLODEnabled = true;
 let lastCameraAltitude = 0;
 let activeGeometryLODIndex = -1;
 let pendingGeometryLODIndex = -1;
@@ -329,7 +376,7 @@ let elevationRanges = null;       // Uint8Array — raw pixel ranges (0-255) per
 let bumpDepths = null;            // Uint8Array — bump-only depths (0-5) per base cell
 let activeDepths = null;          // Uint8Array — current depths used by active geometry
 let pendingDynamicDepths = null;  // Uint8Array — depths sent to worker, pending build
-let subdivTargets = null;         // Uint8Array — continuous targets for heatmap colouring
+let subdivTargets = null;         // Float32Array or Uint8Array — heatmap source data
 let dynamicDepthRequestId = 0;
 const earthShadowsEnabledUniform = { value: 1 };
 
@@ -582,6 +629,13 @@ function resolveTileLODIndex(tileDistance) {
   return EARTH_TEXTURE_LOD_LEVELS.length - 1;
 }
 
+function resolveTileLODIndexAngular(cosTheta, cosThetaMax, cosThetaRange) {
+  if (cosTheta <= cosThetaMax) return 0;
+  const t = (1 - cosTheta) / cosThetaRange;
+  const maxLOD = EARTH_TEXTURE_LOD_LEVELS.length - 1;
+  return Math.min(maxLOD, Math.max(0, Math.round(maxLOD * (1 - Math.pow(t, 1 / lodAggression)))));
+}
+
 function resolveGeometryLODIndex(cameraAltitude) {
   for (let i = 0; i < EARTH_TEXTURE_LOD_LEVELS.length; i++) {
     if (cameraAltitude >= EARTH_TEXTURE_LOD_LEVELS[i].minCameraAltitude) return i;
@@ -629,7 +683,7 @@ function getAdaptiveBumpParamsForLOD(lod) {
 
 // Distance mode: per-cell depth cap from camera distance.
 // Bump mode: continuous subdiv targets from bump-map precision only.
-//   subdivTarget = elevationRange / (1/255)  — one grayscale level = 1 sub-cell
+//   subdivTarget = elevationRangeBytes — one grayscale level = 1 sub-cell
 function computeBumpSubdivTargets() {
   if (!elevationRanges) return null;
   const maxSubdiv = 1 << FULL_DETAIL_BUMP_PARAMS.maxDepth;
@@ -638,7 +692,7 @@ function computeBumpSubdivTargets() {
     // Continuous target — no rounding, so the heatmap gets a smooth
     // gradient across the full range.
     targets[i] = Math.max(0, Math.min(maxSubdiv,
-      elevationRanges[i] * 255));
+      elevationRanges[i]));
   }
   return targets;
 }
@@ -649,8 +703,8 @@ const PIXEL_MAX_DEPTH = Math.ceil(Math.log2(MAX_BUMP_LOD.bumpWidth / FULL_DETAIL
 
 function computeBumpDepths() {
   if (!elevationRanges) return null;
-  const threshold = 1 / 255;
-  const depths = new Int32Array(elevationRanges.length);
+  const threshold = 1;
+  const depths = new Uint8Array(elevationRanges.length);
   for (let i = 0; i < elevationRanges.length; i++) {
     const range = elevationRanges[i];
     if (range <= threshold) {
@@ -662,98 +716,25 @@ function computeBumpDepths() {
   return depths;
 }
 
-// Precomputed cell normals on the unit sphere — computed once per init
-let _cellNormals = null;
-function ensureCellNormals() {
-  if (_cellNormals) return;
-  const baseLon = FULL_DETAIL_BUMP_PARAMS.baseSegmentsLon;
-  const baseLat = FULL_DETAIL_BUMP_PARAMS.baseSegmentsLat;
-  _cellNormals = new Float32Array(baseLon * baseLat * 3);
-  for (let i = 0; i < baseLon; i++) {
-    const phi = ((i + 0.5) / baseLon) * 2 * Math.PI;
-    const cosPhi = Math.cos(phi);
-    const sinPhi = Math.sin(phi);
-    for (let j = 0; j < baseLat; j++) {
-      const theta = ((j + 0.5) / baseLat) * Math.PI;
-      const sinTheta = Math.sin(theta);
-      const idx = (i * baseLat + j) * 3;
-      _cellNormals[idx]     = -cosPhi * sinTheta;
-      _cellNormals[idx + 1] = Math.cos(theta);
-      _cellNormals[idx + 2] = sinPhi * sinTheta;
-    }
-  }
-}
-function computePerCellCombinedDepths(cameraWorldPos) {
-  if (!bumpDepths) return null;
-  ensureCellNormals();
+let lodDistanceMode = false; // false = angular (horizon-scaled), true = pure distance
+export let lodAggression = 0.5;
 
-  const R = EARTH_R;
-  const fovRad = CAMERA_FOV * Math.PI / 180;
-  const pixelsPerRadian = window.innerHeight / fovRad;
-  const baseLon = FULL_DETAIL_BUMP_PARAMS.baseSegmentsLon;
-  const baseLat = FULL_DETAIL_BUMP_PARAMS.baseSegmentsLat;
-  const maxD = FULL_DETAIL_BUMP_PARAMS.maxDepth;
-  const maxSubdiv = 1 << maxD;
-  const TARGET_PX_PER_TRI = 0.5;
-  const cellAngularWidth = (Math.PI * 2) / baseLon;
-  const cellWidthM = cellAngularWidth * R;
-
-  // Camera direction from earth center (world space)
-  const cdx = cameraWorldPos.x - EARTH_POSITION.x;
-  const cdy = cameraWorldPos.y - EARTH_POSITION.y;
-  const cdz = cameraWorldPos.z - EARTH_POSITION.z;
-  const camDist = Math.sqrt(cdx*cdx + cdy*cdy + cdz*cdz);
-  const h = camDist - R;
-
-  // Rotate camera direction into earth-local frame so the dot product
-  // against _cellNormals (which are in unrotated local space) is correct.
-  const cosRY = Math.cos(earthGroup.rotation.y);
-  const sinRY = Math.sin(earthGroup.rotation.y);
-  const cnx = (cdx * cosRY - cdz * sinRY) / camDist;
-  const cny = cdy / camDist;
-  const cnz = (cdx * sinRY + cdz * cosRY) / camDist;
-
-  const combined = new Int32Array(baseLon * baseLat);
-  const depthBins = new Array(maxD + 1).fill(0);
-
-  for (let i = 0; i < baseLon; i++) {
-    for (let j = 0; j < baseLat; j++) {
-      const idx = i * baseLat + j;
-      const bd = bumpDepths[idx];
-      if (bd === 0) { depthBins[0]++; continue; }
-
-      const n3 = idx * 3;
-      const cosAngle = _cellNormals[n3]*cnx + _cellNormals[n3+1]*cny + _cellNormals[n3+2]*cnz;
-
-      // Cell is below the horizon when the camera ray is tangent to the
-      // sphere at a closer point: cosAngle ≤ R/(R+h).
-      if ((R + h) * cosAngle <= R) { depthBins[0]++; continue; }
-
-      // Straight-line distance from camera to this cell centre.
-      const dist = Math.sqrt(R*R + (R+h)*(R+h) - 2*R*(R+h)*cosAngle);
-
-      // Foreshortening: a cell viewed at a grazing angle (near the limb)
-      // appears narrower.  cosBeta = |dot(viewRay, cellNormal)| gives the
-      // projected-width fraction — 1 when facing the camera, 0 at the limb.
-      //   viewRay = (cellPos − cameraPos) / dist
-      //   dot(viewRay, cellNormal) = ((R+h)*cosAngle − R) / dist
-      const cosBeta = ((R + h) * cosAngle - R) / dist;
-      const foreshorten = Math.abs(cosBeta);
-
-      // Apparent angular width — physical width × foreshortening / distance.
-      const angFromCam = cellWidthM * foreshorten / dist;
-      const cellPx = angFromCam * pixelsPerRadian;
-      const triTarget = (cellPx * cellPx) / (2 * TARGET_PX_PER_TRI);
-      const subdivTarget = Math.max(1, Math.min(maxSubdiv, Math.ceil(Math.sqrt(triTarget))));
-      const distDepth = Math.max(0, Math.min(maxD, Math.ceil(Math.log2(Math.max(1, subdivTarget)))));
-
-      const d = Math.min(bd, distDepth);
-      combined[idx] = d;
-      depthBins[d]++;
-    }
-  }
-  return combined;
-}
+// Send initial config to worker
+geometryWorker.postMessage({
+  type: 'configUpdate',
+  config: {
+    earthR: EARTH_R,
+    earthPosX: EARTH_POSITION.x,
+    earthPosY: EARTH_POSITION.y,
+    earthPosZ: EARTH_POSITION.z,
+    distanceLODEnabled: true,
+    lodDistanceMode: false,
+    lodAggression: 0.5,
+    pixelMaxDepth: PIXEL_MAX_DEPTH,
+    baseLon: FULL_DETAIL_BUMP_PARAMS.baseSegmentsLon,
+    baseLat: FULL_DETAIL_BUMP_PARAMS.baseSegmentsLat,
+  },
+});
 
 function publishEarthLODState(geometryParams = null) {
   const activeLOD = EARTH_TEXTURE_LOD_LEVELS[activeGeometryLODIndex] ?? null;
@@ -763,11 +744,26 @@ function publishEarthLODState(geometryParams = null) {
     counts[lod.id] = 0;
     return counts;
   }, {});
+  const loadedTileCounts = EARTH_TEXTURE_LOD_LEVELS.reduce((counts, lod) => {
+    counts[lod.id] = 0;
+    return counts;
+  }, {});
   let visibleTiles = 0;
   let frustumTiles = 0;
   let horizonTiles = 0;
+  let loadedTiles = 0;
+  let estimatedTextureBytes = 0;
   for (const tile of earthTiles) {
     if (tile.activeLODIndex >= 0) tileCounts[EARTH_TEXTURE_LOD_LEVELS[tile.activeLODIndex].id] += 1;
+    if (tile.activeLODIndex >= 0 && tile.colorTexture && tile.nightTexture) {
+      const lod = EARTH_TEXTURE_LOD_LEVELS[tile.activeLODIndex];
+      loadedTileCounts[lod.id] += 1;
+      loadedTiles += 1;
+      estimatedTextureBytes += lod.tileSize * lod.tileSize
+        * RGBA_BYTES_PER_PIXEL
+        * EARTH_TEXTURES_PER_TILE
+        * MIP_OVERHEAD_FACTOR;
+    }
     if (tile.inFrustum) frustumTiles += 1;
     if (tile.inHorizon) horizonTiles += 1;
     if (tile.visible) visibleTiles += 1;
@@ -808,11 +804,16 @@ function publishEarthLODState(geometryParams = null) {
       inHorizon: horizonTiles,
       activeByLOD: tileCounts,
     },
+    textures: {
+      loadedTiles,
+      loadedByLOD: loadedTileCounts,
+      estimatedGpuMB: estimatedTextureBytes / 1048576,
+    },
     geometry: geometryParams ?? previousState.geometry ?? null,
   };
 }
 
-function requestAdaptiveGeometryLOD(lodIndex, depths, customOpts) {
+function requestAdaptiveGeometryLOD(lodIndex, depths, customOpts, incremental = false, dirtyCells = null) {
   if (earthDisposed) return;
   if (!depths && !customOpts && lodIndex === activeGeometryLODIndex) return;
   if (!depths && !customOpts && lodIndex === pendingGeometryLODIndex) return;
@@ -830,12 +831,12 @@ function requestAdaptiveGeometryLOD(lodIndex, depths, customOpts) {
   if (depths) opts.depths = depths;
   opts.smooth = isBumpSmoothingEnabled();
 
-  geometryWorker.postMessage({
-    id,
-    url: lod.bumpSource,
-    radius: EARTH_R,
-    opts,
-  });
+  const msg = { id, url: lod.bumpSource, radius: EARTH_R, opts, lodIndex };
+  if (incremental && dirtyCells) {
+    msg.incremental = true;
+    msg.dirtyCells = new Uint32Array(dirtyCells);
+  }
+  geometryWorker.postMessage(msg);
 }
 
 function configureTileTexture(texture) {
@@ -843,6 +844,9 @@ function configureTileTexture(texture) {
   if (maxAniso > 1) texture.anisotropy = maxAniso;
   texture.needsUpdate = true;
   renderer.initTexture(texture);
+  const src = texture.source?.data;
+  if (src && typeof src.close === 'function') src.close();
+  texture.image = null;
 }
 
 function tileTextureURL(lod, kind, tile) {
@@ -887,6 +891,9 @@ const _earthViewProjection = new THREE.Matrix4();
 const _earthFrustum = new THREE.Frustum();
 const _earthTileSphere = new THREE.Sphere();
 
+let _lastCameraUpdateTime = 0;
+const CAMERA_UPDATE_INTERVAL_MS = 200;
+
 export function updateEarthTextureLOD(camera) {
   if (earthDisposed) return;
 
@@ -894,21 +901,18 @@ export function updateEarthTextureLOD(camera) {
   const cameraAltitude = Math.max(0, _earthCameraWorld.distanceTo(EARTH_POSITION) - EARTH_R);
   lastCameraAltitude = cameraAltitude;
 
-  // Distance LOD: continuously rebuild in background whenever active
-  // geometry doesn't match what the camera position demands.
-  if (distanceLODEnabled && bumpDepths && pendingGeometryLODIndex < 0) {
-    const lodIndex = EARTH_TEXTURE_LOD_LEVELS.length - 1;
-    const combinedDepths = computePerCellCombinedDepths(_earthCameraWorld);
-    if (combinedDepths) {
-      let changed = !activeDepths || activeDepths.length !== combinedDepths.length;
-      if (!changed) {
-        for (let i = 0; i < combinedDepths.length; i++) {
-          if (combinedDepths[i] !== activeDepths[i]) { changed = true; break; }
-        }
-      }
-      if (changed) {
-        requestAdaptiveGeometryLOD(lodIndex, combinedDepths);
-      }
+  if (distanceLODEnabled) {
+    const now = performance.now();
+    if (now - _lastCameraUpdateTime >= CAMERA_UPDATE_INTERVAL_MS) {
+      _lastCameraUpdateTime = now;
+      geometryWorker.postMessage({
+        type: 'cameraUpdate',
+        camX: _earthCameraWorld.x,
+        camY: _earthCameraWorld.y,
+        camZ: _earthCameraWorld.z,
+        earthRotY: earthGroup.rotation.y,
+        lodDistanceMode,
+      });
     }
   }
 
@@ -920,6 +924,20 @@ export function updateEarthTextureLOD(camera) {
   camera.updateMatrixWorld();
   _earthViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   _earthFrustum.setFromProjectionMatrix(_earthViewProjection);
+
+  // Precompute angular LOD params once per frame
+  let cosThetaMax, cosThetaRange, camDirLX, camDirLY, camDirLZ;
+  if (!lodDistanceMode && earthTiles.length > 0) {
+    const cosRY = Math.cos(earthGroup.rotation.y);
+    const sinRY = Math.sin(earthGroup.rotation.y);
+    const camDist = _earthCameraWorld.distanceTo(EARTH_POSITION);
+    const h = camDist - EARTH_R;
+    camDirLX = ((_earthCameraWorld.x - EARTH_POSITION.x) * cosRY - (_earthCameraWorld.z - EARTH_POSITION.z) * sinRY) / camDist;
+    camDirLY = (_earthCameraWorld.y - EARTH_POSITION.y) / camDist;
+    camDirLZ = ((_earthCameraWorld.x - EARTH_POSITION.x) * sinRY + (_earthCameraWorld.z - EARTH_POSITION.z) * cosRY) / camDist;
+    cosThetaMax = EARTH_R / (EARTH_R + h);
+    cosThetaRange = 1 - cosThetaMax;
+  }
 
   for (const tile of earthTiles) {
     _earthTileWorld.copy(tile.localCenter).applyMatrix4(earthGroup.matrixWorld);
@@ -934,11 +952,24 @@ export function updateEarthTextureLOD(camera) {
     tile.visible = tile.inHorizon && tile.inFrustum;
     tile.material.visible = tile.visible;
 
-    if (!tile.visible) continue;
+    if (!tile.visible) {
+      if (tile.pendingLODIndex > 0) {
+        tile.requestToken += 1;
+        tile.pendingLODIndex = -1;
+      }
+      if (tile.activeLODIndex > 0) {
+        requestTileLOD(tile, 0);
+      }
+      continue;
+    }
 
     if (activeGeometryLODIndex >= 0) {
       const lodIndex = textureLODEnabled
-        ? resolveTileLODIndex(tile.distance)
+        ? (lodDistanceMode
+            ? resolveTileLODIndex(tile.distance)
+            : resolveTileLODIndexAngular(
+                (tile.localCenter.x * camDirLX + tile.localCenter.y * camDirLY + tile.localCenter.z * camDirLZ) / EARTH_R,
+                cosThetaMax, cosThetaRange))
         : EARTH_TEXTURE_LOD_LEVELS.length - 1;
       requestTileLOD(tile, lodIndex);
     }
@@ -1076,7 +1107,7 @@ function applyEarthSurfaceShader(shader) {
     reflectedLight.directDiffuse *= _earthShadowedDayFactor;
     reflectedLight.directSpecular *= _earthShadowedDayFactor;
     reflectedLight.indirectDiffuse *= _earthShadowedDayFactor;
-    reflectedLight.indirectDiffuse += diffuseColor.rgb * (300.0 + 2200.0 * _earthNoShadowFill);`,
+    reflectedLight.indirectDiffuse += diffuseColor.rgb * (1200.0 + 2200.0 * _earthNoShadowFill);`,
   );
   shader.fragmentShader = shader.fragmentShader.replace(
     '#include <tonemapping_fragment>',
@@ -1191,10 +1222,15 @@ function rebuildHeatmapFromActiveDepths() {
 
 function rebuildHeatmapForMode() {
   if (heatmapLODMode === 'bump') {
-    const targets = computeBumpSubdivTargets();
-    if (!targets) return;
-    subdivTargets = targets;
-    requestHeatmapBuild('bump', subdivTargets, getHeatmapNormMax());
+    // Use discrete bump depths for direct comparison with distance heatmap
+    const depths = bumpDepths;
+    if (!depths) return;
+    subdivTargets = depths;
+    const targets = new Float32Array(depths.length);
+    for (let i = 0; i < depths.length; i++) {
+      targets[i] = depths[i] > 0 ? (1 << depths[i]) : 0;
+    }
+    requestHeatmapBuild('bump', targets, getHeatmapNormMax());
   } else {
     rebuildHeatmapFromActiveDepths();
   }
@@ -1229,6 +1265,11 @@ export function setEarthLODHeatmapMode(mode) {
 export function setDistanceLODEnabled(enabled) {
   distanceLODEnabled = enabled;
   activeDepths = null;
+  geometryWorker.postMessage({
+    type: 'configUpdate',
+    config: { distanceLODEnabled: enabled },
+    resetActiveDepths: true,
+  });
   if (!enabled) {
     const lodIndex = EARTH_TEXTURE_LOD_LEVELS.length - 1;
     const lod = EARTH_TEXTURE_LOD_LEVELS[lodIndex];
@@ -1246,14 +1287,54 @@ function isBumpSmoothingEnabled() {
 export function setTextureLODEnabled(enabled) {
   if (textureLODEnabled === enabled) return;
   textureLODEnabled = enabled;
+
+  // Precompute angular LOD params
+  let cosThetaMax, cosThetaRange, camDirLX, camDirLY, camDirLZ;
+  if (!lodDistanceMode && earthTiles.length > 0) {
+    camera.getWorldPosition(_earthCameraWorld);
+    const cosRY = Math.cos(earthGroup.rotation.y);
+    const sinRY = Math.sin(earthGroup.rotation.y);
+    const camDist = _earthCameraWorld.distanceTo(EARTH_POSITION);
+    const h = camDist - EARTH_R;
+    camDirLX = ((_earthCameraWorld.x - EARTH_POSITION.x) * cosRY - (_earthCameraWorld.z - EARTH_POSITION.z) * sinRY) / camDist;
+    camDirLY = (_earthCameraWorld.y - EARTH_POSITION.y) / camDist;
+    camDirLZ = ((_earthCameraWorld.x - EARTH_POSITION.x) * sinRY + (_earthCameraWorld.z - EARTH_POSITION.z) * cosRY) / camDist;
+    cosThetaMax = EARTH_R / (EARTH_R + h);
+    cosThetaRange = 1 - cosThetaMax;
+  }
+
   // Reload all visible tiles at the correct LOD for the new setting
   for (const tile of earthTiles) {
     if (!tile.visible) continue;
     const lodIndex = textureLODEnabled
-      ? resolveTileLODIndex(tile.distance)
+      ? (lodDistanceMode
+          ? resolveTileLODIndex(tile.distance)
+          : resolveTileLODIndexAngular(
+              (tile.localCenter.x * camDirLX + tile.localCenter.y * camDirLY + tile.localCenter.z * camDirLZ) / EARTH_R,
+              cosThetaMax, cosThetaRange))
       : EARTH_TEXTURE_LOD_LEVELS.length - 1;
     requestTileLOD(tile, lodIndex);
   }
+}
+
+export function setLODDistanceMode(enabled) {
+  lodDistanceMode = enabled;
+  activeDepths = null;
+  geometryWorker.postMessage({
+    type: 'configUpdate',
+    config: { lodDistanceMode: enabled },
+    resetActiveDepths: true,
+  });
+}
+
+export function setLODAggression(value) {
+    lodAggression = value;
+    activeDepths = null;
+    geometryWorker.postMessage({
+      type: 'configUpdate',
+      config: { lodAggression: value },
+      resetActiveDepths: true,
+    });
 }
 
 export function setEarthShadowsEnabled(enabled) {
@@ -1265,18 +1346,54 @@ export function setEarthShadowsEnabled(enabled) {
 }
 
 export function preloadAllTileTexturesAsync(onProgress) {
-  const maxLOD = EARTH_TEXTURE_LOD_LEVELS.length - 1;
-  const total = earthTiles.length;
+  camera.getWorldPosition(_earthCameraWorld);
+  earthGroup.updateMatrixWorld();
+
+  // Precompute angular LOD params
+  let cosThetaMax, cosThetaRange, camDirLX, camDirLY, camDirLZ;
+  if (!lodDistanceMode) {
+    const cosRY = Math.cos(earthGroup.rotation.y);
+    const sinRY = Math.sin(earthGroup.rotation.y);
+    const camDist = _earthCameraWorld.distanceTo(EARTH_POSITION);
+    const h = camDist - EARTH_R;
+    camDirLX = ((_earthCameraWorld.x - EARTH_POSITION.x) * cosRY - (_earthCameraWorld.z - EARTH_POSITION.z) * sinRY) / camDist;
+    camDirLY = (_earthCameraWorld.y - EARTH_POSITION.y) / camDist;
+    camDirLZ = ((_earthCameraWorld.x - EARTH_POSITION.x) * sinRY + (_earthCameraWorld.z - EARTH_POSITION.z) * cosRY) / camDist;
+    cosThetaMax = EARTH_R / (EARTH_R + h);
+    cosThetaRange = 1 - cosThetaMax;
+  }
+
+  const tilesToLoad = [];
+  for (const tile of earthTiles) {
+    _earthTileWorld.copy(tile.localCenter).applyMatrix4(earthGroup.matrixWorld);
+    _earthTileNormal.copy(_earthTileWorld).sub(EARTH_POSITION).normalize();
+    _earthTileToCamera.copy(_earthCameraWorld).sub(_earthTileWorld);
+    if (_earthTileNormal.dot(_earthTileToCamera) < 0) continue;
+    const dist = _earthTileToCamera.length();
+    const cosTheta = lodDistanceMode ? 0
+      : (tile.localCenter.x * camDirLX + tile.localCenter.y * camDirLY + tile.localCenter.z * camDirLZ) / EARTH_R;
+    tilesToLoad.push({ tile, dist, cosTheta });
+  }
+  const total = tilesToLoad.length;
+  if (total === 0) return Promise.resolve();
+  tilesToLoad.sort((a, b) => a.dist - b.dist);
+  const preloadTargets = tilesToLoad.slice(0, INITIAL_TILE_PRELOAD_LIMIT);
+  const preloadTotal = preloadTargets.length;
+  if (preloadTotal === 0) return Promise.resolve();
   let remaining = total;
   let resolve;
   const promise = new Promise(r => { resolve = r; });
   function onTileDone() {
     remaining--;
-    onProgress?.(total - remaining, total);
+    onProgress?.(preloadTotal - remaining, preloadTotal);
     if (remaining <= 0) resolve();
   }
-  for (const tile of earthTiles) {
-    requestTileLOD(tile, maxLOD, onTileDone);
+  remaining = preloadTotal;
+  for (const { tile, dist, cosTheta } of preloadTargets) {
+    const lodIndex = lodDistanceMode
+      ? resolveTileLODIndex(dist)
+      : resolveTileLODIndexAngular(cosTheta, cosThetaMax, cosThetaRange);
+    requestTileLOD(tile, lodIndex, onTileDone);
   }
   return promise;
 }
@@ -1294,7 +1411,6 @@ export function disposeEarthRuntime() {
   activeDepths = null;
   pendingDynamicDepths = null;
   subdivTargets = null;
-  _cellNormals = null;
   for (const tile of earthTiles) {
     tile.requestToken += 1;
     tile.material.map = null;
@@ -1320,16 +1436,9 @@ export function preloadInitialBumpGeometry() {
   const lod = EARTH_TEXTURE_LOD_LEVELS[lodIndex];
   const opts = getAdaptiveBumpParamsForLOD(lod);
   opts.threshold = 1 / 255;
-  if (distanceLODEnabled) {
-    const camPos = new THREE.Vector3();
-    camera.getWorldPosition(camPos);
-    const combinedDepths = computePerCellCombinedDepths(camPos);
-    if (combinedDepths) {
-      requestAdaptiveGeometryLOD(lodIndex, combinedDepths, opts);
-      return;
-    }
-  }
-  requestAdaptiveGeometryLOD(lodIndex, null, opts);
+  const baseLon = opts.baseSegmentsLon;
+  const baseLat = opts.baseSegmentsLat;
+  requestAdaptiveGeometryLOD(lodIndex, new Uint8Array(baseLon * baseLat), opts);
 }
 
 export function queryBumpHeight(lat, lon) {

@@ -38,7 +38,32 @@ canvas { position: fixed; inset: 0; z-index: 0; }
 #debug-lod { bottom: 84px; }
 #debug-texture-lod { bottom: 56px; }
 #debug-smooth { bottom: 28px; }
+#debug-memory { bottom: 252px; }
 #debug-wireframe { bottom: 0px; }
+
+#debug-lod-mode { bottom: 308px; }
+#debug-aggression-wrap {
+  position: fixed; bottom: 280px; right: 20px; z-index: 100;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 4px; padding: 4px 10px;
+  color: rgba(255,255,255,0.65); font-family: inherit; font-size: 0.62rem;
+  letter-spacing: 0.06em;
+}
+#debug-aggression {
+  width: 72px; cursor: pointer; accent-color: var(--accent);
+}
+#debug-aggression-val {
+  color: rgba(255,255,255,0.9); min-width: 22px; text-align: right;
+}
+
+.memory-stats {
+  position: fixed; top: 72px; left: 20px; z-index: 100;
+  background: rgba(0,0,0,0.65); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px; padding: 6px 12px;
+  color: rgba(255,255,255,0.9); font-family: inherit; font-size: 0.65rem;
+  font-weight: 600; letter-spacing: 0.06em;
+}
 
 /* ── Navigation ─────────────────────────────── */
 nav {

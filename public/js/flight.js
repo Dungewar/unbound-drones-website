@@ -8,7 +8,7 @@
 // The descent phase is long so altitude and angular motion happen together,
 // creating a curved spiral into orbit rather than a dive-then-orbit.
 
-import * as THREE from 'three';
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import {
   FLIGHT_ORBIT_ALTITUDE,
   FLIGHT_ORBIT_ENTRY_ALTITUDE,

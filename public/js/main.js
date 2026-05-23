@@ -25,7 +25,7 @@ import {
 import {
   earthGroup, earthSurface,
   setEarthTextureLightingMode, setEarthLODHeatmapMode,
-  setDistanceLODEnabled, setEarthShadowsEnabled, setTextureLODEnabled,
+  setDistanceLODEnabled, setEarthShadowsEnabled, setTextureLODEnabled, setLODDistanceMode, setLODAggression,
   updateEarthTextureLOD, disposeEarthRuntime,
   preloadInitialBumpGeometry, preloadAllTileTexturesAsync,
   earthPreviewReady, firstGeometryReady, geometryApplied,
@@ -374,7 +374,7 @@ function handleDebugLODClick(e) {
   e.currentTarget.textContent = distanceLOD ? 'Distance LOD on' : 'Distance LOD off';
 }
 
-let textureLOD = false;
+let textureLOD = true;
 function handleDebugTextureLODClick(e) {
   textureLOD = !textureLOD;
   setTextureLODEnabled(textureLOD);
@@ -439,6 +439,26 @@ debugLODButton?.addEventListener('click', handleDebugLODClick);
 debugLODButton?.classList.add('active');
 debugLODButton && (debugLODButton.textContent = 'Distance LOD on');
 debugTextureLODButton?.addEventListener('click', handleDebugTextureLODClick);
+
+const debugLODModeButton = document.getElementById('debug-lod-mode');
+let lodDistanceModeOn = false;
+function handleDebugLODModeClick(e) {
+  lodDistanceModeOn = !lodDistanceModeOn;
+  setLODDistanceMode(lodDistanceModeOn);
+  e.currentTarget.classList.toggle('active', lodDistanceModeOn);
+  e.currentTarget.textContent = lodDistanceModeOn ? 'LOD: distance' : 'LOD: angular';
+}
+debugLODModeButton?.addEventListener('click', handleDebugLODModeClick);
+
+const debugAggressionInput = document.getElementById('debug-aggression');
+const debugAggressionVal = document.getElementById('debug-aggression-val');
+function handleAggressionInput(e) {
+  const val = parseFloat(e.target.value);
+  if (debugAggressionVal) debugAggressionVal.textContent = val.toFixed(1);
+  setLODAggression(val);
+}
+debugAggressionInput?.addEventListener('input', handleAggressionInput);
+
 const debugSmoothButton = document.getElementById('debug-smooth');
 debugSmoothButton?.addEventListener('click', handleDebugSmoothClick);
 if (debugSmoothButton && bumpSmoothing) {
@@ -446,6 +466,38 @@ if (debugSmoothButton && bumpSmoothing) {
   debugSmoothButton.textContent = 'Smooth bump';
 }
 debugWireframeButton?.addEventListener('click', handleDebugWireframeClick);
+
+const debugMemoryButton = document.getElementById('debug-memory');
+const memoryStatsPanel = document.getElementById('memory-stats');
+const memTotalSpan = document.getElementById('mem-total');
+let memoryStatsOn = false;
+let memoryStatsTimer = null;
+
+function updateMemoryStats() {
+  if (!memoryStatsOn || !memTotalSpan) return;
+  const perf = performance;
+  if (perf.memory) {
+    const mb = (perf.memory.usedJSHeapSize / (1024 * 1024)).toFixed(1);
+    memTotalSpan.textContent = `${mb} MB`;
+  } else {
+    memTotalSpan.textContent = 'N/A';
+  }
+}
+
+function handleDebugMemoryClick(e) {
+  memoryStatsOn = !memoryStatsOn;
+  if (memoryStatsPanel) memoryStatsPanel.style.display = memoryStatsOn ? '' : 'none';
+  e.currentTarget.classList.toggle('active', memoryStatsOn);
+  e.currentTarget.textContent = memoryStatsOn ? 'Memory stats on' : 'Memory stats';
+  if (memoryStatsOn) {
+    updateMemoryStats();
+    memoryStatsTimer = setInterval(updateMemoryStats, 1000);
+  } else {
+    clearInterval(memoryStatsTimer);
+    memoryStatsTimer = null;
+  }
+}
+debugMemoryButton?.addEventListener('click', handleDebugMemoryClick);
 
 // ── Cleanup ──────────────────────────────────
 const DEBUG = new URLSearchParams(window.location.search).has('debug');
@@ -506,6 +558,8 @@ function cleanupRuntime() {
   debugLODButton?.removeEventListener('click', handleDebugLODClick);
   debugTextureLODButton?.removeEventListener('click', handleDebugTextureLODClick);
   debugWireframeButton?.removeEventListener('click', handleDebugWireframeClick);
+  debugMemoryButton?.removeEventListener('click', handleDebugMemoryClick);
+  clearInterval(memoryStatsTimer);
   cleanupClouds();
   disposeEarthRuntime();
   disposeAtmosphere();

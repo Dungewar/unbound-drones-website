@@ -36,15 +36,25 @@ export default function Home() {
 					</div>
 				</div>
 				<canvas id="c" />
+<div id="memory-stats" className="memory-stats" style={{ display: 'none' }}>
+  <span id="mem-total">-</span>
+</div>
 				<button id="debug-textures" className="debug-toggle active">Textures on</button>
 				<button id="debug-clouds" className="debug-toggle active">Clouds on</button>
 				<button id="debug-atmosphere" className="debug-toggle active">Atmosphere on</button>
 				<button id="debug-burn" className="debug-toggle">Burn off</button>
 				<button id="debug-shadows" className="debug-toggle active">Shadows on</button>
 				<button id="debug-lod" className="debug-toggle active">Distance LOD on</button>
-				<button id="debug-texture-lod" className="debug-toggle">Texture LOD off</button>
+				<div id="debug-aggression-wrap">
+					<label htmlFor="debug-aggression">LOD aggression</label>
+					<input type="range" id="debug-aggression" min="0.3" max="4.0" step="0.1" defaultValue="1.5" />
+					<span id="debug-aggression-val">1.5</span>
+				</div>
+				<button id="debug-lod-mode" className="debug-toggle">LOD: angular</button>
+				<button id="debug-texture-lod" className="debug-toggle active">Texture LOD on</button>
 				<button id="debug-smooth" className="debug-toggle">Smooth bump</button>
 <button id="debug-wireframe" className="debug-toggle">Wireframe</button>
+<button id="debug-memory" className="debug-toggle">Memory stats</button>
 
 			<nav>
 				<div className="nav-inner">
