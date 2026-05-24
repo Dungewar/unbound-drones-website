@@ -1,7 +1,7 @@
 // Drone mesh + per-frame updates (rotors, blinking lights).
 // `fgRoot` is the world-positioned anchor; `drone` rotates inside it.
 
-import * as THREE from 'three';
+import * as THREE from './three.module.js';
 import { LOCAL_LIGHT_LAYER } from './scene.js';
 import { generateCloudDeckBytes } from './clouds-shared.js';
 import {

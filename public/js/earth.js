@@ -1,7 +1,7 @@
 // Earth surface — sphere mesh with adaptive bump displacement and day/night textures.
 // Sun, atmosphere, and city are in their own modules.
 
-import * as THREE from 'three';
+import * as THREE from './three.module.js';
 import { scene, renderer, camera, LOCAL_LIGHT_LAYER } from './scene.js';
 import {
   EARTH_R, EARTH_POSITION, TERRAIN_EXAGGERATION,
@@ -97,7 +97,7 @@ async function loadTileTexturesAsync({ tile, lodIndex, token, onComplete }) {
 }
 
 // ── Geometry worker ─────────────────────────
-const geometryWorker = new Worker('/js/earth-geometry-worker.js');
+const geometryWorker = new Worker(new URL('./earth-geometry-worker.js', import.meta.url).href);
 let geometryRequestId = 0;
 let _sampleRequestId = 0;
 const _sampleResolvers = new Map();
@@ -384,7 +384,7 @@ let earthCellHeatmapTex = null;   // per-cell CanvasTexture for heatmap mode
 let heatmapCanvas = null;
 let heatmapCtx = null;
 let heatmapRequestId = 0;
-const heatmapWorker = new Worker('/js/heatmap-worker.js');
+const heatmapWorker = new Worker(new URL('./heatmap-worker.js', import.meta.url).href);
 
 heatmapWorker.onmessage = (e) => {
   const { id, phase } = e.data;
@@ -623,17 +623,32 @@ earthSurface.receiveShadow = true;
 earthGroup.add(earthSurface);
 
 function resolveTileLODIndex(tileDistance) {
-  for (let i = 0; i < EARTH_TEXTURE_LOD_LEVELS.length; i++) {
-    if (tileDistance >= EARTH_TEXTURE_LOD_LEVELS[i].minTileDistance) return i;
-  }
-  return EARTH_TEXTURE_LOD_LEVELS.length - 1;
+  const maxLOD = EARTH_TEXTURE_LOD_LEVELS.length - 1;
+  if (tileDistance <= 0) return maxLOD;
+  // Quadratic: LOD drops with distance² — matches screen-space area falloff
+  const maxD = EARTH_R * Math.PI;
+  const t = Math.min(1, (tileDistance / maxD) ** 3);
+  return Math.round(maxLOD * (1 - t));
 }
 
-function resolveTileLODIndexAngular(cosTheta, cosThetaMax, cosThetaRange) {
+function resolveTileLODIndexAngular(cosTheta, cosThetaMax, cosThetaRange, distance) {
   if (cosTheta <= cosThetaMax) return 0;
-  const t = (1 - cosTheta) / cosThetaRange;
   const maxLOD = EARTH_TEXTURE_LOD_LEVELS.length - 1;
-  return Math.min(maxLOD, Math.max(0, Math.round(maxLOD * (1 - Math.pow(t, 1 / lodAggression)))));
+
+  // Distance: gentler exponent so the 3 LOD levels spread across the range.
+  const distExp = 1 / Math.max(1, lodAggression - 2);
+  const t_dist = Math.min(1, distance / (EARTH_R * Math.PI));
+  const baseLOD = maxLOD * (1 - Math.pow(t_dist, distExp));
+
+  // Angle penalty based on surface angle (not normalized by visible range).
+  // Using the raw (1-cosTheta) means the same physical angle gets the same
+  // penalty regardless of altitude — close tiles aren't unfairly penalized.
+  const surfaceAngle = Math.acos(cosTheta); // 0 at nadir, π/2 at 90°
+  const angleRef = Math.PI / 3;             // 60° reference
+  const t_angle = Math.min(1, surfaceAngle / angleRef);
+  const angleFactor = 1 - Math.pow(t_angle, 1 / (lodAggression - 1));
+
+  return Math.min(maxLOD, Math.max(0, Math.round(baseLOD * angleFactor)));
 }
 
 function resolveGeometryLODIndex(cameraAltitude) {
@@ -716,8 +731,8 @@ function computeBumpDepths() {
   return depths;
 }
 
-let lodDistanceMode = false; // false = angular (horizon-scaled), true = pure distance
-export let lodAggression = 0.5;
+let lodDistanceMode = true;
+export let lodAggression = 4.0;
 
 // Send initial config to worker
 geometryWorker.postMessage({
@@ -728,8 +743,8 @@ geometryWorker.postMessage({
     earthPosY: EARTH_POSITION.y,
     earthPosZ: EARTH_POSITION.z,
     distanceLODEnabled: true,
-    lodDistanceMode: false,
-    lodAggression: 0.5,
+    lodDistanceMode: true,
+    lodAggression: 4.0,
     pixelMaxDepth: PIXEL_MAX_DEPTH,
     baseLon: FULL_DETAIL_BUMP_PARAMS.baseSegmentsLon,
     baseLat: FULL_DETAIL_BUMP_PARAMS.baseSegmentsLat,
@@ -905,6 +920,10 @@ export function updateEarthTextureLOD(camera) {
     const now = performance.now();
     if (now - _lastCameraUpdateTime >= CAMERA_UPDATE_INTERVAL_MS) {
       _lastCameraUpdateTime = now;
+      camera.updateMatrixWorld();
+      _earthViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      _earthFrustum.setFromProjectionMatrix(_earthViewProjection);
+      const fp = _earthFrustum.planes;
       geometryWorker.postMessage({
         type: 'cameraUpdate',
         camX: _earthCameraWorld.x,
@@ -912,6 +931,14 @@ export function updateEarthTextureLOD(camera) {
         camZ: _earthCameraWorld.z,
         earthRotY: earthGroup.rotation.y,
         lodDistanceMode,
+        frustumPlanes: [
+          fp[0].normal.x, fp[0].normal.y, fp[0].normal.z, fp[0].constant,
+          fp[1].normal.x, fp[1].normal.y, fp[1].normal.z, fp[1].constant,
+          fp[2].normal.x, fp[2].normal.y, fp[2].normal.z, fp[2].constant,
+          fp[3].normal.x, fp[3].normal.y, fp[3].normal.z, fp[3].constant,
+          fp[4].normal.x, fp[4].normal.y, fp[4].normal.z, fp[4].constant,
+          fp[5].normal.x, fp[5].normal.y, fp[5].normal.z, fp[5].constant,
+        ],
       });
     }
   }
@@ -969,7 +996,7 @@ export function updateEarthTextureLOD(camera) {
             ? resolveTileLODIndex(tile.distance)
             : resolveTileLODIndexAngular(
                 (tile.localCenter.x * camDirLX + tile.localCenter.y * camDirLY + tile.localCenter.z * camDirLZ) / EARTH_R,
-                cosThetaMax, cosThetaRange))
+                cosThetaMax, cosThetaRange, tile.distance))
         : EARTH_TEXTURE_LOD_LEVELS.length - 1;
       requestTileLOD(tile, lodIndex);
     }
@@ -1311,7 +1338,7 @@ export function setTextureLODEnabled(enabled) {
           ? resolveTileLODIndex(tile.distance)
           : resolveTileLODIndexAngular(
               (tile.localCenter.x * camDirLX + tile.localCenter.y * camDirLY + tile.localCenter.z * camDirLZ) / EARTH_R,
-              cosThetaMax, cosThetaRange))
+              cosThetaMax, cosThetaRange, tile.distance))
       : EARTH_TEXTURE_LOD_LEVELS.length - 1;
     requestTileLOD(tile, lodIndex);
   }
@@ -1392,7 +1419,7 @@ export function preloadAllTileTexturesAsync(onProgress) {
   for (const { tile, dist, cosTheta } of preloadTargets) {
     const lodIndex = lodDistanceMode
       ? resolveTileLODIndex(dist)
-      : resolveTileLODIndexAngular(cosTheta, cosThetaMax, cosThetaRange);
+      : resolveTileLODIndexAngular(cosTheta, cosThetaMax, cosThetaRange, dist);
     requestTileLOD(tile, lodIndex, onTileDone);
   }
   return promise;

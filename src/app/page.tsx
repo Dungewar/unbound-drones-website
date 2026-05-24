@@ -16,7 +16,17 @@ export default function Home() {
 		script.src = "/js/main.js";
 		document.body.appendChild(script);
 
+		// Debug panel toggle
+		const debugShow = document.getElementById("debug-show");
+		const debugPanel = document.getElementById("debug-panel");
+		const handleDebugToggle = () => {
+			const shown = debugPanel?.classList.toggle("visible");
+			if (debugShow) debugShow.textContent = shown ? "Hide debug" : "Debug";
+		};
+		debugShow?.addEventListener("click", handleDebugToggle);
+
 		return () => {
+			debugShow?.removeEventListener("click", handleDebugToggle);
 			w.__UNBOUND_SCENE_CLEANUP?.();
 			w.__UNBOUND_SCENE_CLEANUP = undefined;
 			w.__UNBOUND_SCENE_LOADED = false;
@@ -25,20 +35,23 @@ export default function Home() {
 	}, []);
 
 	return (
-			<>
-				<div id="loading-screen">
-					<div className="loading-content">
-						<img src="/logo-big.png" alt="UNBOUND" className="loading-logo" />
-						<div id="loading-items" className="loading-items"></div>
-						<div className="loading-progress-track">
-							<div id="loading-progress-bar" className="loading-progress-fill"></div>
-						</div>
+		<>
+			<div id="loading-screen">
+				<div className="loading-content">
+					<img src="/logo-big.png" alt="UNBOUND" className="loading-logo" />
+					<div id="loading-items" className="loading-items"></div>
+					<div className="loading-progress-track">
+						<div id="loading-progress-bar" className="loading-progress-fill"></div>
 					</div>
 				</div>
-				<canvas id="c" />
-<div id="memory-stats" className="memory-stats" style={{ display: 'none' }}>
-  <span id="mem-total">-</span>
-</div>
+			</div>
+			<canvas id="c" />
+
+			<button id="debug-show" className="debug-toggle">Debug</button>
+			<div id="debug-panel">
+				<div id="memory-stats" className="memory-stats" style={{ display: "none" }}>
+					<span id="mem-total">-</span>
+				</div>
 				<button id="debug-textures" className="debug-toggle active">Textures on</button>
 				<button id="debug-clouds" className="debug-toggle active">Clouds on</button>
 				<button id="debug-atmosphere" className="debug-toggle active">Atmosphere on</button>
@@ -47,14 +60,14 @@ export default function Home() {
 				<button id="debug-lod" className="debug-toggle active">Distance LOD on</button>
 				<div id="debug-aggression-wrap">
 					<label htmlFor="debug-aggression">LOD aggression</label>
-					<input type="range" id="debug-aggression" min="0.3" max="4.0" step="0.1" defaultValue="1.5" />
-					<span id="debug-aggression-val">1.5</span>
+					<input type="range" id="debug-aggression" min="0.3" max="4.0" step="0.1" defaultValue="4.0" />
+					<span id="debug-aggression-val">4.0</span>
 				</div>
-				<button id="debug-lod-mode" className="debug-toggle">LOD: angular</button>
 				<button id="debug-texture-lod" className="debug-toggle active">Texture LOD on</button>
 				<button id="debug-smooth" className="debug-toggle">Smooth bump</button>
-<button id="debug-wireframe" className="debug-toggle">Wireframe</button>
-<button id="debug-memory" className="debug-toggle">Memory stats</button>
+				<button id="debug-wireframe" className="debug-toggle">Wireframe</button>
+				<button id="debug-memory" className="debug-toggle">Memory stats</button>
+			</div>
 
 			<nav>
 				<div className="nav-inner">

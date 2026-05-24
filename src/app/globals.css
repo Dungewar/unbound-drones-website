@@ -102,6 +102,7 @@ nav {
 section {
   min-height: 100vh; display: flex; align-items: center;
   padding: 100px 40px; position: relative;
+  scroll-margin-top: 56px;
 }
 .section-inner { max-width: 1200px; margin: 0 auto; width: 100%; }
 
@@ -116,13 +117,12 @@ section {
 .eyebrow {
   font-size: 0.65rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase;
   color: rgba(var(--accent-rgb), 0.9); margin-bottom: 16px; display: inline-block;
-  background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(0,0,0,0.55) 100%);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
   padding: 6px 14px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 h1 {
   font-size: clamp(5rem, 11vw, 12rem); font-weight: 900; letter-spacing: -0.05em;
@@ -138,13 +138,12 @@ h3 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.02em; margin-bottom
   display: table;
   width: fit-content;
   max-width: 100%;
-  background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.45) 100%);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
   padding: 12px 16px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 2px 16px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .body-text + .body-text { margin-top: 10px; }
 
@@ -160,17 +159,16 @@ h3 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.02em; margin-bottom
 .btn-outline { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.25); }
 .btn-outline:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.4); }
 .btn-glass {
-  background: rgba(0,0,0,0.5);
+  background: rgba(0, 0, 0, 0.5);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-color: rgba(255,255,255,0.18);
+  border-color: rgba(255,255,255,0.06);
 }
-.btn-glass:hover { background: rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.35); }
+.btn-glass:hover { background: rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.18); }
 
 /* ── Section-specific layouts ───────────────── */
 #hero     { padding-top: 140px; align-items: flex-start; padding-bottom: 120px; min-height: 200vh; }
-#about    { justify-content: flex-start; min-height: 150vh; }
-#about    .overlay-text { margin-top: 20vh; }
+#about    { justify-content: flex-start; }
 #features { justify-content: flex-end; }
 #features .overlay-text { margin-bottom: 10vh; }
 #programs { justify-content: flex-start; }
@@ -183,13 +181,12 @@ h3 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.02em; margin-bottom
 /* ── Stat row ───────────────────────────────── */
 .stat-row {
   display: inline-flex; gap: 40px; margin-top: 24px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.45) 100%);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
   padding: 16px 20px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 2px 16px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .stat h4 { font-size: 2rem; font-weight: 800; letter-spacing: -0.03em; color: rgba(var(--accent-rgb), 1); }
 .stat span { font-size: 0.8rem; color: rgba(255,255,255,0.4); letter-spacing: 0.08em; text-transform: uppercase; }
@@ -281,3 +278,8 @@ footer {
 .loading-item-done .loading-item-status {
   color: rgba(85,136,255,0.65);
 }
+
+/* ── Debug panel toggle ───────────────────── */
+#debug-show { top: 72px; bottom: auto; }
+#debug-panel { display: none; }
+#debug-panel.visible { display: block; }

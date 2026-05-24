@@ -1,7 +1,7 @@
 // Renderer, scene, camera, and ambient/fill/rim lights.
 // The sun light lives in earth.js since it's tied to the visible sun mesh.
 
-import * as THREE from 'three';
+import * as THREE from './three.module.js';
 import { CAMERA_FOV, CAMERA_NEAR, CAMERA_FAR } from './config.js';
 
 export const canvas = document.getElementById('c');

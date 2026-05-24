@@ -8,7 +8,7 @@
 // The descent phase is long so altitude and angular motion happen together,
 // creating a curved spiral into orbit rather than a dive-then-orbit.
 
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+import * as THREE from './three.module.js';
 import {
   FLIGHT_ORBIT_ALTITUDE,
   FLIGHT_ORBIT_ENTRY_ALTITUDE,
@@ -39,15 +39,22 @@ export function computeFlightState({
   }
 
   // ── Orbit axis (idle → city great-circle plane) ──────────────────────────
+  // When the drone is nearly directly above the city, idleDir ≈ svDir and the
+  // cross product is numerically unstable. Blend to a stable fallback axis.
   _orbitAxis.crossVectors(svDir, idleDir);
   const axisLen = _orbitAxis.length();
-  if (axisLen > 0.001) {
+  const arb = Math.abs(idleDir.y) < 0.9
+    ? new THREE.Vector3(0, 1, 0)
+    : new THREE.Vector3(1, 0, 0);
+  const fallbackAxis = new THREE.Vector3().crossVectors(arb, idleDir).normalize();
+  if (axisLen < 0.001) {
+    _orbitAxis.copy(fallbackAxis);
+  } else if (axisLen < 0.08) {
     _orbitAxis.divideScalar(axisLen);
+    const t = 1 - (axisLen - 0.001) / (0.08 - 0.001);
+    _orbitAxis.lerp(fallbackAxis, t * t).normalize();
   } else {
-    const arb = Math.abs(idleDir.y) < 0.9
-      ? new THREE.Vector3(0, 1, 0)
-      : new THREE.Vector3(1, 0, 0);
-    _orbitAxis.crossVectors(arb, idleDir).normalize();
+    _orbitAxis.divideScalar(axisLen);
   }
 
   const directDot   = Math.max(-1, Math.min(1, idleDir.dot(svDir)));

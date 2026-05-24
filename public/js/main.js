@@ -4,7 +4,7 @@
 // scroll → flight state → drone position/orientation → camera, per-frame
 // system updates, debug toggles, and cleanup.
 
-import * as THREE from 'three';
+import * as THREE from './three.module.js';
 
 import {
   EARTH_R, SV_LOCAL, SV_LAT, SV_LON, EARTH_POSITION, DEFAULT_SUN_WORLD_DIR,
@@ -25,7 +25,7 @@ import {
 import {
   earthGroup, earthSurface,
   setEarthTextureLightingMode, setEarthLODHeatmapMode,
-  setDistanceLODEnabled, setEarthShadowsEnabled, setTextureLODEnabled, setLODDistanceMode, setLODAggression,
+  setDistanceLODEnabled, setEarthShadowsEnabled, setTextureLODEnabled, setLODAggression,
   updateEarthTextureLOD, disposeEarthRuntime,
   preloadInitialBumpGeometry, preloadAllTileTexturesAsync,
   earthPreviewReady, firstGeometryReady, geometryApplied,
@@ -440,15 +440,6 @@ debugLODButton?.classList.add('active');
 debugLODButton && (debugLODButton.textContent = 'Distance LOD on');
 debugTextureLODButton?.addEventListener('click', handleDebugTextureLODClick);
 
-const debugLODModeButton = document.getElementById('debug-lod-mode');
-let lodDistanceModeOn = false;
-function handleDebugLODModeClick(e) {
-  lodDistanceModeOn = !lodDistanceModeOn;
-  setLODDistanceMode(lodDistanceModeOn);
-  e.currentTarget.classList.toggle('active', lodDistanceModeOn);
-  e.currentTarget.textContent = lodDistanceModeOn ? 'LOD: distance' : 'LOD: angular';
-}
-debugLODModeButton?.addEventListener('click', handleDebugLODModeClick);
 
 const debugAggressionInput = document.getElementById('debug-aggression');
 const debugAggressionVal = document.getElementById('debug-aggression-val');
@@ -573,5 +564,7 @@ function cleanupRuntime() {
 }
 
 window.__UNBOUND_SCENE_CLEANUP = cleanupRuntime;
+window.__UNBOUND_PAUSE = function() { cancelAnimationFrame(rafId); rafId = 0; };
+window.__UNBOUND_RESUME = function() { if (!rafId && !isDisposed) animate(); };
 window.addEventListener('pagehide', cleanupRuntime);
 window.addEventListener('beforeunload', cleanupRuntime);

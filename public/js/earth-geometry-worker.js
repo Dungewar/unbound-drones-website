@@ -134,7 +134,7 @@ function computeWorkerCombinedDepths(cam) {
   if (!workerBumpDepths || !workerCellNormals || !workerConfig) return null;
 
   const { earthR, earthPosX, earthPosY, earthPosZ, pixelMaxDepth, lodAggression } = workerConfig;
-  const { camX, camY, camZ, earthRotY, lodDistanceMode } = cam;
+  const { camX, camY, camZ, earthRotY, lodDistanceMode, frustumPlanes } = cam;
   const baseLon = workerConfig.baseLon;
   const baseLat = workerConfig.baseLat;
   const size = baseLon * baseLat;
@@ -144,25 +144,57 @@ function computeWorkerCombinedDepths(cam) {
   const sinRY = Math.sin(earthRotY);
 
   if (lodDistanceMode) {
+    const camToCenter = Math.sqrt(
+      (camX - earthPosX) ** 2 + (camY - earthPosY) ** 2 + (camZ - earthPosZ) ** 2,
+    );
+    const h = camToCenter - earthR;
+    const camDirWX = (camX - earthPosX) / camToCenter;
+    const camDirWY = (camY - earthPosY) / camToCenter;
+    const camDirWZ = (camZ - earthPosZ) / camToCenter;
+    const camDirLX = camDirWX * cosRY - camDirWZ * sinRY;
+    const camDirLY = camDirWY;
+    const camDirLZ = camDirWX * sinRY + camDirWZ * cosRY;
+    const cosThetaMax = earthR / (earthR + h);
     const maxDist = earthR * Math.PI;
+    const hasFrustum = frustumPlanes && frustumPlanes.length === 24;
+    // Cell bounding radius for sphere-vs-frustum test
+    const cellDLon = (2 * Math.PI) / baseLon;
+    const cellDLat = Math.PI / baseLat;
+    const cellBoundingR = earthR * Math.sin(Math.hypot(cellDLon, cellDLat) * 0.5);
     for (let i = 0; i < baseLon; i++) {
       for (let j = 0; j < baseLat; j++) {
         const idx = i * baseLat + j;
         const bd = workerBumpDepths[idx];
         if (bd === 0) continue;
         const n3 = idx * 3;
+        const cosTheta = workerCellNormals[n3] * camDirLX
+                       + workerCellNormals[n3 + 1] * camDirLY
+                       + workerCellNormals[n3 + 2] * camDirLZ;
+        if (cosTheta < cosThetaMax) continue;
         const clx = workerCellNormals[n3] * earthR;
         const cly = workerCellNormals[n3 + 1] * earthR;
         const clz = workerCellNormals[n3 + 2] * earthR;
         const cwx = clx * cosRY + clz * sinRY + earthPosX;
         const cwy = cly + earthPosY;
         const cwz = -clx * sinRY + clz * cosRY + earthPosZ;
+        if (hasFrustum) {
+          const fp = frustumPlanes;
+          let cellOutside = false;
+          for (let p = 0; p < 6; p++) {
+            const po = p * 4;
+            if (fp[po] * cwx + fp[po + 1] * cwy + fp[po + 2] * cwz + fp[po + 3] < -cellBoundingR) {
+              cellOutside = true;
+              break;
+            }
+          }
+          if (cellOutside) continue;
+        }
         const dx = cwx - camX;
         const dy = cwy - camY;
         const dz = cwz - camZ;
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (dist > maxDist) continue;
-        const t = dist / maxDist;
+        const t = Math.min(1, (dist / maxDist) ** 3);
         const distDepth = Math.max(0, Math.round(pixelMaxDepth * (1 - Math.pow(t, 1 / lodAggression))));
         combined[idx] = Math.min(bd, distDepth);
       }

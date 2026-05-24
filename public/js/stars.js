@@ -1,7 +1,7 @@
 // Distant starfield. The group's position is updated each frame in main.js
 // to follow the camera so the stars never appear to move.
 
-import * as THREE from 'three';
+import * as THREE from './three.module.js';
 import { scene } from './scene.js';
 
 const STAR_MIN = 260000000000;

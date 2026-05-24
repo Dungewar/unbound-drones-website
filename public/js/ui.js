@@ -17,9 +17,9 @@ export function scrollToSection(id) {
 }
 
 function updateScrollProgress() {
-  const features = document.getElementById('features');
-  const endY = features
-    ? features.offsetTop
+  const contact = document.getElementById('contact');
+  const endY = contact
+    ? contact.offsetTop
     : (document.documentElement.scrollHeight - window.innerHeight);
   scrollProgress = endY > 0
     ? Math.max(0, Math.min(1, window.scrollY / endY))

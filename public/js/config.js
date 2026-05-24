@@ -1,7 +1,7 @@
 // Central configuration — every tunable constant lives here so camera angles,
 // drone trajectory, sun position, etc. can be adjusted in one place.
 
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+import * as THREE from './three.module.js';
 
 // ── Earth ────────────────────────────────────
 export const EARTH_R = 6371000;

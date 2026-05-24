@@ -1,6 +1,6 @@
 // Procedurally generated Earth cloud layer — climate-banded coverage with cyclonic swirls.
 
-import * as THREE from 'three';
+import * as THREE from './three.module.js';
 
 import { generateCloudDeckBytes } from './clouds-shared.js';
 import { renderer } from './scene.js';
@@ -79,6 +79,20 @@ function createTexture(bytes, width, height, colorSpace, format = THREE.RGBAForm
   renderer.initTexture(texture);
   texture.image.data = null;
   return texture;
+}
+
+function rgbToRgba(rgb) {
+  const count = rgb.length / 3;
+  const rgba = new Uint8Array(count * 4);
+  for (let i = 0; i < count; i++) {
+    const si = i * 3;
+    const di = i * 4;
+    rgba[di] = rgb[si];
+    rgba[di + 1] = rgb[si + 1];
+    rgba[di + 2] = rgb[si + 2];
+    rgba[di + 3] = 255;
+  }
+  return rgba;
 }
 
 function blurField(source, width, height, radius) {
@@ -207,13 +221,13 @@ function createCloudDeckTextures(deckSet) {
   return {
     width,
     height,
-    lowColor: createTexture(deckSet.lowColor, width, height, THREE.SRGBColorSpace, THREE.RGBFormat),
+    lowColor: createTexture(rgbToRgba(deckSet.lowColor), width, height, THREE.SRGBColorSpace, THREE.RGBAFormat),
     lowAlpha: createTexture(deckSet.lowAlpha, width, height, THREE.NoColorSpace, THREE.RedFormat),
     lowDepth: createTexture(deckSet.lowDepth, width, height, THREE.NoColorSpace, THREE.RedFormat),
-    midColor: createTexture(deckSet.midColor, width, height, THREE.SRGBColorSpace, THREE.RGBFormat),
+    midColor: createTexture(rgbToRgba(deckSet.midColor), width, height, THREE.SRGBColorSpace, THREE.RGBAFormat),
     midAlpha: createTexture(deckSet.midAlpha, width, height, THREE.NoColorSpace, THREE.RedFormat),
     midDepth: createTexture(deckSet.midDepth, width, height, THREE.NoColorSpace, THREE.RedFormat),
-    cirrusColor: createTexture(deckSet.cirrusColor, width, height, THREE.SRGBColorSpace, THREE.RGBFormat),
+    cirrusColor: createTexture(rgbToRgba(deckSet.cirrusColor), width, height, THREE.SRGBColorSpace, THREE.RGBAFormat),
     cirrusAlpha: createTexture(deckSet.cirrusAlpha, width, height, THREE.NoColorSpace, THREE.RedFormat),
     cirrusDepth: createTexture(deckSet.cirrusDepth, width, height, THREE.NoColorSpace, THREE.RedFormat),
   };
@@ -421,7 +435,7 @@ const allCloudMeshes = [...allLowMeshes, ...allMidMeshes, ...allCirrusMeshes];
 function applyCloudDeckToMeshes(meshes, nextColorMap, nextAlphaMap, nextDepthMap) {
   for (const mesh of meshes) {
     mesh.material.userData.colorMap = nextColorMap;
-    mesh.material.map = cloudTexturesEnabled ? nextColorMap : null;
+    mesh.material.map = nextColorMap;
     mesh.material.alphaMap = nextAlphaMap;
     mesh.material.displacementMap = nextDepthMap;
     mesh.material.bumpMap = nextDepthMap;
@@ -453,7 +467,7 @@ function requestHighResCloudDeck() {
   const guideForWorker = serializeEarthGuide(earthGuide);
   const transferList = getEarthGuideTransferList(guideForWorker);
   releaseEarthGuide();
-  const worker = new Worker('/js/clouds-worker.js', { type: 'module' });
+  const worker = new Worker(new URL('./clouds-worker.js', import.meta.url).href, { type: 'module' });
   cloudWorker = worker;
   const requestId = `${Date.now()}-${Math.random()}`;
 
@@ -487,8 +501,8 @@ let cirrusRotation = 0.014;
 export function setCloudTextureLightingMode(texturesOn) {
   cloudTexturesEnabled = texturesOn;
   allCloudMeshes.forEach((mesh) => {
-    mesh.material.map = texturesOn ? mesh.material.userData.colorMap : null;
-    mesh.material.color.set(texturesOn ? '#ffffff' : '#f2f2f2');
+    mesh.material.emissive.set(texturesOn ? '#000000' : '#f0f4ff');
+    mesh.material.emissiveIntensity = texturesOn ? 0 : 0.55;
     mesh.material.needsUpdate = true;
   });
 }

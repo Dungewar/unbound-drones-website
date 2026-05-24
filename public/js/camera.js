@@ -4,7 +4,7 @@
 // createCameraController() returns a per-frame update function that blends
 // between the idle pose and a close flight-follow as scroll progresses.
 
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+import * as THREE from './three.module.js';
 import {
   IDLE_CAMERA_OUT_DISTANCE, IDLE_CAMERA_SIDE_DISTANCE,
   IDLE_LOOK_RIGHT_OFFSET, IDLE_LOOK_UP_OFFSET,
